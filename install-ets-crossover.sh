@@ -413,14 +413,36 @@ dotnet_release() {
 }
 
 # Remove Wine Mono if CrossOver installed it into the bottle (it intercepts .NET)
-cx_wine uninstaller --list 2>/dev/null | strip_cr | awk -F'|||' '/Wine Mono/ {print $1}' | while read -r guid; do
-  [ -n "$guid" ] && cx_wine uninstaller --remove "$guid" >/dev/null 2>&1 || true
+cx_wine uninstaller --list 2>/dev/null | strip_cr | grep -i 'Wine Mono' | grep -oE '\{[0-9A-Fa-f-]{36}\}' | while read -r guid; do
+  info "Removing Wine Mono ($guid)..."
+  cx_wine uninstaller --remove "$guid" >/dev/null 2>&1 || true
 done
+
+# The registry alone can't be trusted: CrossOver/Wine Mono pre-register a fake .NET 4.8.1
+# (Release 533320) without installing Microsoft's runtime. Check the actual runtime files.
+dotnet48_files_ok() {
+  local fw f
+  for fw in Framework Framework64; do
+    for f in clr.dll mscoreei.dll mscorlib.dll; do
+      [ -f "$WINEPREFIX/drive_c/windows/Microsoft.NET/$fw/v4.0.30319/$f" ] || return 1
+      is_wine_dll "$WINEPREFIX/drive_c/windows/Microsoft.NET/$fw/v4.0.30319/$f" && return 1
+    done
+  done
+  return 0
+}
 
 rel=$(dotnet_release 'HKLM\Software\Microsoft\NET Framework Setup\NDP\v4\Full')
 wow=$(dotnet_release 'HKLM\Software\Wow6432Node\Microsoft\NET Framework Setup\NDP\v4\Full')
-if [ "$rel" -lt "$DOTNET48_RELEASE" ] || [ "$wow" -lt "$DOTNET48_RELEASE" ]; then
+if ! dotnet48_files_ok || [ "$rel" -lt "$DOTNET48_RELEASE" ] || [ "$wow" -lt "$DOTNET48_RELEASE" ]; then
   download "$DOTNET48_URL" "$ETS_CACHE/NDP48-x86-x64-AllOS-ENU.exe" "$DOTNET48_SHA256"
+  if ! dotnet48_files_ok; then
+    # Remove the fake registration, otherwise the installer sees a "newer" .NET and exits without installing
+    info "Removing fake .NET 4.x registration (Release $rel) left by Wine Mono / CrossOver..."
+    for node in 'HKLM\Software\Microsoft\NET Framework Setup\NDP\v4' \
+                'HKLM\Software\Wow6432Node\Microsoft\NET Framework Setup\NDP\v4'; do
+      cx_wine reg delete "$node" /f >/dev/null 2>&1 || true
+    done
+  fi
   # The 4.8 installer treats Windows 10 as "already has 4.8" and silently does nothing
   info "Setting bottle to Windows 7 so the .NET 4.8 installer actually installs..."
   set_windows_version win7
@@ -435,6 +457,8 @@ if [ "$rel" -lt "$DOTNET48_RELEASE" ] || [ "$wow" -lt "$DOTNET48_RELEASE" ]; the
   wow=$(dotnet_release 'HKLM\Software\Wow6432Node\Microsoft\NET Framework Setup\NDP\v4\Full')
   [ "$rel" -ge "$DOTNET48_RELEASE" ] && [ "$wow" -ge "$DOTNET48_RELEASE" ] \
     || die ".NET 4.8 installation incomplete (Release native=$rel wow=$wow, expected >= $DOTNET48_RELEASE)"
+  dotnet48_files_ok \
+    || die ".NET 4.8 installer finished but Microsoft's runtime files (clr.dll, mscoreei.dll) are missing from Microsoft.NET\\Framework(64)\\v4.0.30319"
 fi
 
 info "Switching bottle to Windows 10..."
