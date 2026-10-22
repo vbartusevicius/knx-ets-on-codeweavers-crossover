@@ -736,6 +736,107 @@ ets_installed() {
   [ -f "$ets_dir/ETS${ETS_MAJOR}N.exe" ] || [ -f "$ets_dir/ETS${ETS_MAJOR}.exe" ]
 }
 
+# Fallback when the installer's managed (.NET) setup UI fails to load under Wine:
+# Burn then runs only its prerequisite UI and exits 0 without installing ETS.
+# Unpack the MSI packages embedded in the Burn bundle and install them with msiexec.
+install_via_embedded_msis() {
+  local work="$WINEPREFIX/drive_c/ets-msi"
+  rm -rf "$work"
+  mkdir -p "$work"
+  info "Unpacking MSI packages embedded in $(basename "$SETUP_EXE")..."
+  local plan
+  plan=$(python3 - "$SETUP_EXE" "$work" "$SEVENZIP" <<'PY'
+import os, shutil, struct, subprocess, sys
+import xml.etree.ElementTree as ET
+
+exe, work, sevenzip = sys.argv[1:]
+data = open(exe, "rb").read()
+
+# Burn appends its UX and attached containers as CAB files after the engine
+cab_dirs, i = [], 0
+while True:
+    i = data.find(b"MSCF\x00\x00\x00\x00", i)
+    if i < 0:
+        break
+    size = struct.unpack_from("<I", data, i + 8)[0]
+    if 0 < size <= len(data) - i:
+        n = len(cab_dirs)
+        cab = os.path.join(work, f"c{n}.cab")
+        out = os.path.join(work, f"c{n}")
+        open(cab, "wb").write(data[i:i + size])
+        if subprocess.run([sevenzip, "x", "-y", f"-o{out}", cab], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
+            cab_dirs.append(out)
+        os.remove(cab)
+        i += size
+    else:
+        i += 4
+
+def find(name):
+    for d in cab_dirs:
+        p = os.path.join(d, name)
+        if os.path.isfile(p):
+            return p
+    return None
+
+manifest = None
+for d in cab_dirs:
+    for name in os.listdir(d):
+        p = os.path.join(d, name)
+        if os.path.isfile(p) and b"<BurnManifest" in open(p, "rb").read(4096):
+            manifest = p
+if not manifest:
+    sys.exit("no BurnManifest found in bundle")
+
+def local(tag):
+    return tag.rsplit("}", 1)[-1]
+
+root = ET.parse(manifest).getroot()
+payloads = {e.get("Id"): e for e in root.iter() if local(e.tag) == "Payload"}
+chain = next((e for e in root.iter() if local(e.tag) == "Chain"), None)
+if chain is None:
+    sys.exit("no Chain in BurnManifest")
+
+for pkg in chain:
+    if local(pkg.tag) != "MsiPackage":
+        continue
+    pid = pkg.get("Id")
+    pdir = os.path.join(work, "pkg", pid)
+    msi = None
+    for ref in pkg:
+        if local(ref.tag) != "PayloadRef":
+            continue
+        pl = payloads.get(ref.get("Id"))
+        if pl is None:
+            continue
+        src = find(pl.get("SourcePath", ""))
+        if not src:
+            sys.exit(f"payload {pl.get('FilePath')} of {pid} not found in bundle (not embedded?)")
+        dst = os.path.join(pdir, pl.get("FilePath").replace("\\", "/"))
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copyfile(src, dst)
+        if msi is None and dst.lower().endswith(".msi"):
+            msi = dst
+    if msi:
+        props = " ".join(
+            f'{p.get("Id")}="{p.get("Value")}"'
+            for p in pkg if local(p.tag) == "MsiProperty" and "[" not in (p.get("Value") or "")
+        )
+        print(f"{pid}\t{os.path.relpath(msi, work)}\t{props}")
+PY
+  ) || { warn "Could not unpack MSI packages from the installer"; return 1; }
+
+  [ -n "$plan" ] || { warn "No MSI packages found in the installer"; return 1; }
+  local pid rel props win_msi
+  while IFS=$'\t' read -r pid rel props; do
+    win_msi="C:\\ets-msi\\$(printf '%s' "$rel" | tr '/' '\\')"
+    info "Installing package $pid via msiexec..."
+    # shellcheck disable=SC2086
+    cx_wine msiexec /i "$win_msi" /qn /norestart ALLUSERS=1 $props /l*v "C:\\ets-msi-$pid.log" || \
+      warn "msiexec returned non-zero for $pid (log: $WINEPREFIX/drive_c/ets-msi-$pid.log)"
+    cx_wineserver -w
+  done <<< "$plan"
+}
+
 if ets_installed && [ "$REINSTALL" != "1" ]; then
   ok "$APP_NAME already installed (use --reinstall to run the installer again)"
 else
@@ -745,11 +846,19 @@ else
     cx_wine "$SETUP_EXE" /quiet /norestart /log "c:\\ets$ETS_MAJOR-install.log" || true
   fi
   cx_wineserver -w
+
+  if ! ets_installed; then
+    warn "The ETS setup program exited without installing $APP_NAME."
+    if [ -f "$log" ]; then
+      warn "Errors reported by the setup program:"
+      grep -aE '\]e[0-9]{3}:|Failed|failed|0x8[0-9a-fA-F]{7}' "$log" | grep -v 'result: 0x0' | head -20 >&2 || true
+    fi
+    install_via_embedded_msis || true
+  fi
 fi
 
 if ! ets_installed; then
-  [ -f "$log" ] && tail -40 "$log" >&2
-  die "$APP_NAME installation failed; see $log or re-run with --interactive"
+  die "$APP_NAME installation failed; see $log and $WINEPREFIX/drive_c/ets-msi-*.log"
 fi
 
 if [ -f "$ets_dir/ETS${ETS_MAJOR}N.exe" ]; then
