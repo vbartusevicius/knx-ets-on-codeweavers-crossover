@@ -413,7 +413,8 @@ dotnet_release() {
 }
 
 # Remove Wine Mono if CrossOver installed it into the bottle (it intercepts .NET)
-cx_wine uninstaller --list 2>/dev/null | strip_cr | grep -i 'Wine Mono' | grep -oE '\{[0-9A-Fa-f-]{36}\}' | while read -r guid; do
+mono_guids=$(cx_wine uninstaller --list 2>/dev/null | strip_cr | grep -i 'Wine Mono' | grep -oE '\{[0-9A-Fa-f-]{36}\}' || true)
+for guid in $mono_guids; do
   info "Removing Wine Mono ($guid)..."
   cx_wine uninstaller --remove "$guid" >/dev/null 2>&1 || true
 done
