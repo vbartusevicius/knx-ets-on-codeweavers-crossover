@@ -280,8 +280,11 @@ fi
 
 command -v python3 >/dev/null 2>&1 || die "python3 is required (install Xcode Command Line Tools: xcode-select --install)"
 
+# Homebrew's "sevenzip" installs the binary as 7zz; p7zip and others provide 7z
+find_7z() { command -v 7zz 2>/dev/null || command -v 7z 2>/dev/null || true; }
+
 missing_brew=()
-command -v 7z >/dev/null 2>&1         || missing_brew+=(sevenzip)
+[ -n "$(find_7z)" ]                   || missing_brew+=(sevenzip)
 command -v msiextract >/dev/null 2>&1 || missing_brew+=(msitools)
 command -v msiinfo >/dev/null 2>&1    || missing_brew+=(msitools)
 
@@ -290,6 +293,8 @@ if [ "${#missing_brew[@]}" -gt 0 ]; then
   info "Installing Homebrew tools: ${missing_brew[*]}"
   brew install $(printf '%s\n' "${missing_brew[@]}" | sort -u)
 fi
+SEVENZIP=$(find_7z)
+[ -n "$SEVENZIP" ] || die "7-Zip (7zz or 7z) not found after installing sevenzip"
 
 if ! python3 -c "import fontTools" >/dev/null 2>&1; then
   info "Installing Python package fonttools..."
@@ -461,7 +466,7 @@ download "$DOTNET40_URL" "$ETS_CACHE/dotNetFx40_Full_x86_x64.exe" "$DOTNET40_SHA
 extract="$ETS_CACHE/dotnet40-msis"
 rm -rf "$extract"
 mkdir -p "$extract"
-7z x -y "-o$extract" "$ETS_CACHE/dotNetFx40_Full_x86_x64.exe" \
+"$SEVENZIP" x -y "-o$extract" "$ETS_CACHE/dotNetFx40_Full_x86_x64.exe" \
   netfx_Core_x86.msi netfx_Core_x64.msi netfx_Core.mzz >/dev/null
 
 x86_msi="$extract/netfx_Core_x86.msi"

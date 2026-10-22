@@ -38,7 +38,7 @@ Example:
 
 | Step | Problem Fixed | How It Works |
 |---|---|---|
-| **1. Host Prerequisites** | Missing archive/MSI/font extraction tools on macOS | Installs `sevenzip` (`7z`), `msitools` (`msiextract`, `msiinfo`), `cabextract`, and Python `fonttools` if not present. |
+| **1. Host Prerequisites** | Missing archive/MSI/font extraction tools on macOS | Installs `sevenzip` (`7zz`), `msitools` (`msiextract`, `msiinfo`), and Python `fonttools` if not present. |
 | **2. Case-Sensitive APFS `ProjectStore` (opt-in, `--case-store`)** | One user reported saved projects failing to reopen with checksum errors under Wine on macOS (cause unconfirmed; APFS case-insensitivity is suspected) | Creates a Case-sensitive APFS sparsebundle (`~/Library/Application Support/ETSStore.sparsebundle` at `/Volumes/ETSStore/KNX`), symlinks `drive_c/ProgramData/KNX` to it, and adds a LaunchAgent that remounts it at login. Off by default. |
 | **3. Native CrossOver Bottle** | Bottle metadata and environment variables must integrate with CrossOver GUI | Creates the bottle (`ETS6` or `ETS5`) via CrossOver's native `cxbottle` tool and configures `cxbottle.conf`. |
 | **4. `.NET Framework 4.8` & `VC++ 2022`** | Microsoft's `.NET 4.8` installer exits `0` without installing anything if the bottle reports Windows 10 | Switches the bottle to **Windows 7**, installs `.NET 4.8` (`NDP48-x86-x64-AllOS-ENU.exe`), verifies `Release >= 528049`, switches back to **Windows 10**, and installs `VC++ 2015–2022` (x86 & x64). |
