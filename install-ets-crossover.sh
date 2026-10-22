@@ -503,6 +503,13 @@ cx_wine reg add 'HKLM\SOFTWARE\Microsoft\.NETFramework' /v InstallRoot /t REG_SZ
   /d 'C:\windows\Microsoft.NET\Framework64\' /f >/dev/null
 cx_wine reg add 'HKLM\SOFTWARE\Wow6432Node\Microsoft\.NETFramework' /v InstallRoot /t REG_SZ \
   /d 'C:\windows\Microsoft.NET\Framework\' /f >/dev/null
+# Wine registers a fake .NET 2.0 runtime (policy v2.0 + stub mscorwks.dll). The native shim then
+# picks "v2.0" for legacy hosts (MSI custom actions) and crashes in mscorwks.DllGetClassObjectInternal.
+# Force all legacy activation onto the real .NET 4 runtime.
+for node in 'HKLM\SOFTWARE\Microsoft\.NETFramework' 'HKLM\SOFTWARE\Wow6432Node\Microsoft\.NETFramework'; do
+  cx_wine reg add "$node" /v OnlyUseLatestCLR /t REG_DWORD /d 1 /f >/dev/null
+  cx_wine reg delete "$node\\Policy\\v2.0" /f >/dev/null 2>&1 || true
+done
 
 cx_wineserver -k
 sleep 1
